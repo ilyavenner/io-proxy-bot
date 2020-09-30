@@ -2,7 +2,7 @@ use std::{io::Write, process::ChildStdin, sync::Arc};
 
 use async_trait::async_trait;
 use carapax::{
-    types::{Message, MessageData},
+    types::{Integer, Message, MessageData, MessageKind, SupergroupChat},
     Api, Handler,
 };
 use snafu::ResultExt;
@@ -17,13 +17,16 @@ pub struct Context {
 
     /// A Minecraft Bedrock server `stdin`.
     pub server_stdin: Arc<Mutex<ChildStdin>>,
+
+    pub master_chat_id: Integer,
 }
 
 impl Context {
-    pub fn new(api: Api, server_stdin: ChildStdin) -> Self {
+    pub fn new(api: Api, server_stdin: ChildStdin, master_chat_id: Integer) -> Self {
         Self {
             api,
             server_stdin: Arc::new(Mutex::new(server_stdin)),
+            master_chat_id,
         }
     }
 }
@@ -38,9 +41,14 @@ impl Handler<Context> for MessageHandler {
     async fn handle(&mut self, context: &Context, message: Self::Input) -> Self::Output {
         let text: String = match message {
             Message {
+                kind:
+                    MessageKind::Supergroup {
+                        chat: SupergroupChat { id, .. },
+                        ..
+                    },
                 data: MessageData::Text(text),
                 ..
-            } => text.data,
+            } if id == context.master_chat_id => text.data,
             _ => return Ok(()),
         };
 

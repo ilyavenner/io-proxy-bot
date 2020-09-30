@@ -1,10 +1,12 @@
 use std::path::PathBuf;
 
 use carapax::types::Integer;
+use clap::AppSettings;
 use structopt::StructOpt;
 
 /// An util which provides managing of the Minecraft Bedrock Server.
 #[derive(Debug, StructOpt)]
+#[structopt(global_settings = &[AppSettings::AllowNegativeNumbers])]
 pub struct Opt {
     /// A telegram bot token.
     pub token: String,
