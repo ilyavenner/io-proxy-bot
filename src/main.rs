@@ -52,7 +52,7 @@ async fn run(opt: Opt) -> Result<(), Error> {
 
     let config = Config::new(token);
     let api = Api::new(config).expect("failed to create API");
-    let context = Context::new(api.clone(), server_stdin);
+    let context = Context::new(api.clone(), server_stdin, master_chat_id);
 
     let cloned_api = api.clone();
     let server_stdout_reader = tokio::spawn(async move {
