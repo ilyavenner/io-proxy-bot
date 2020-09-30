@@ -5,7 +5,10 @@ use carapax::{
     types::{Message, MessageData},
     Api, Handler,
 };
+use snafu::ResultExt;
 use tokio::sync::Mutex;
+
+use crate::error::*;
 
 /// A bot context.
 pub struct Context {
@@ -30,7 +33,7 @@ pub struct MessageHandler;
 #[async_trait]
 impl Handler<Context> for MessageHandler {
     type Input = Message;
-    type Output = ();
+    type Output = Result<(), Error>;
 
     async fn handle(&mut self, context: &Context, message: Self::Input) -> Self::Output {
         let text: String = match message {
@@ -38,12 +41,14 @@ impl Handler<Context> for MessageHandler {
                 data: MessageData::Text(text),
                 ..
             } => text.data,
-            _ => return,
+            _ => return Ok(()),
         };
 
         let mut server_stdin = context.server_stdin.lock().await;
         server_stdin
             .write_all(format!("{}\n", text).as_bytes())
-            .unwrap();
+            .context(IoError)?;
+
+        Ok(())
     }
 }
