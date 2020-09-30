@@ -1,5 +1,6 @@
 use std::path::PathBuf;
 
+use carapax::types::Integer;
 use structopt::StructOpt;
 
 /// An util which provides managing of the Minecraft Bedrock Server.
@@ -7,6 +8,9 @@ use structopt::StructOpt;
 pub struct Opt {
     /// A telegram bot token.
     pub token: String,
+
+    /// A master chat ID.
+    pub master_chat_id: Integer,
 
     /// A path to the server binary.
     pub path_to_binary: PathBuf,
@@ -43,7 +47,7 @@ pub fn setup_logger() {
             ));
         })
         .level(log::LevelFilter::Warn)
-        .level_for("pluscrm_bot", log::LevelFilter::Trace)
+        .level_for("rusty_manager_bot", log::LevelFilter::Trace)
         .chain(std::io::stdout())
         .apply()
         .expect("cannot setup logger");
