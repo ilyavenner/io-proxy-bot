@@ -1,14 +1,14 @@
 use std::{
-    io::{BufRead, BufReader, Read},
+    io::BufReader,
     process::{Command, Stdio},
 };
 
-use carapax::{longpoll::LongPoll, methods::SendMessage, types::Integer, Api, Config, Dispatcher};
+use carapax::{longpoll::LongPoll, Api, Config, Dispatcher};
 use snafu::ResultExt;
 use structopt::StructOpt;
 
 use crate::{
-    bot::{Context, MessageHandler},
+    bot::{stream_server_output, Context, MessageHandler},
     error::*,
     init::{setup_logger, Opt},
 };
@@ -51,16 +51,14 @@ async fn run() -> Result<(), Error> {
 
     let cloned_api = api.clone();
     let server_stdout_reader = tokio::spawn(async move {
-        let api = cloned_api;
         let stdout_reader = BufReader::new(server_stdout);
-        read_server_output(api, master_chat_id, stdout_reader).await
+        stream_server_output(stdout_reader, cloned_api, master_chat_id).await
     });
 
     let cloned_api = api.clone();
     let server_stderr_reader = tokio::spawn(async move {
-        let api = cloned_api;
         let stderr_reader = BufReader::new(server_stderr);
-        read_server_output(api, master_chat_id, stderr_reader).await
+        stream_server_output(stderr_reader, cloned_api, master_chat_id).await
     });
 
     let mut dispatcher = Dispatcher::new(context);
@@ -76,25 +74,6 @@ async fn run() -> Result<(), Error> {
     server_stderr_reader
         .await
         .expect("cannot join `server_stderr_reader`")?;
-
-    Ok(())
-}
-
-async fn read_server_output<R>(
-    api: Api,
-    master_chat_id: Integer,
-    reader: BufReader<R>,
-) -> Result<(), Error>
-where
-    R: Read,
-{
-    for line in reader.lines() {
-        let line = line.context(IoError)?;
-        let text = format!("@: {}", line);
-        let message = SendMessage::new(master_chat_id, text);
-
-        api.execute(message).await.context(ExecuteError)?;
-    }
 
     Ok(())
 }

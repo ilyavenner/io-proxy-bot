@@ -1,7 +1,14 @@
-use std::{io::Write, process::ChildStdin, sync::Arc};
+use std::{
+    fmt::Write as FmtWrite,
+    io::{BufRead, BufReader, Read, Write},
+    process::ChildStdin,
+    sync::Arc,
+    time::{Duration, Instant},
+};
 
 use async_trait::async_trait;
 use carapax::{
+    methods::SendMessage,
     types::{Integer, Message, MessageData, MessageKind, SupergroupChat},
     Api, Handler,
 };
@@ -60,4 +67,41 @@ impl Handler<Context> for MessageHandler {
 
         Ok(())
     }
+}
+
+const FILLING_DURATION: Duration = Duration::from_secs(1);
+
+pub async fn stream_server_output<R>(
+    mut reader: BufReader<R>,
+    api: Api,
+    master_chat_id: Integer,
+) -> Result<(), Error>
+where
+    R: Read,
+{
+    loop {
+        let text = collect_server_output(&mut reader)?;
+        let message = SendMessage::new(master_chat_id, text);
+
+        api.execute(message).await.context(ExecuteError)?;
+    }
+}
+
+fn collect_server_output<R>(reader: &mut BufReader<R>) -> Result<String, Error>
+where
+    R: Read,
+{
+    let mut text = String::from("@\n");
+    let beginning_instant = Instant::now();
+
+    for line in reader.lines() {
+        let line = line.context(IoError)?;
+        writeln!(text, "{}", line).unwrap();
+
+        if Instant::now().duration_since(beginning_instant) >= FILLING_DURATION {
+            break;
+        }
+    }
+
+    Ok(text)
 }
