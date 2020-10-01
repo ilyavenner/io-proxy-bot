@@ -18,6 +18,7 @@ pub struct Context {
     /// A Minecraft Bedrock server `stdin`.
     pub server_stdin: Arc<Mutex<ChildStdin>>,
 
+    /// A target chat ID.
     pub master_chat_id: Integer,
 }
 
@@ -55,7 +56,7 @@ impl Handler<Context> for MessageHandler {
         let mut server_stdin = context.server_stdin.lock().await;
         server_stdin
             .write_all(format!("{}\n", text).as_bytes())
-            .context(IoError)?;
+            .context(IoError)?; // BUG: broken pipe
 
         Ok(())
     }

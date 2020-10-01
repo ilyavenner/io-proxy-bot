@@ -1,18 +1,11 @@
 use std::{
-    io::{BufRead, BufReader},
-    process::{ChildStdout, Command, Stdio},
-    thread::sleep,
+    io::{BufRead, BufReader, Read},
+    process::{Command, Stdio},
 };
 
-use carapax::{
-    longpoll::LongPoll,
-    methods::SendMessage,
-    types::{Integer, ParseMode},
-    Api, Config, Dispatcher,
-};
+use carapax::{longpoll::LongPoll, methods::SendMessage, types::Integer, Api, Config, Dispatcher};
 use snafu::ResultExt;
 use structopt::StructOpt;
-use tokio::time::Duration;
 
 use crate::{
     bot::{Context, MessageHandler},
@@ -27,28 +20,30 @@ mod init;
 #[tokio::main]
 async fn main() {
     setup_logger();
-    let result = run(StructOpt::from_args()).await;
+    let result = run().await;
 
     if let Err(e) = result {
         log::error!("{}", e);
     }
 }
 
-async fn run(opt: Opt) -> Result<(), Error> {
+async fn run() -> Result<(), Error> {
     let Opt {
         token,
         master_chat_id,
         path_to_binary,
-    } = opt;
+    } = StructOpt::from_args();
 
     let server_binary = Command::new(path_to_binary)
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
         .spawn()
         .context(IoError)?;
 
     let server_stdin = server_binary.stdin.expect("server `stdin` should exist");
     let server_stdout = server_binary.stdout.expect("server `stdout` should exist");
+    let server_stderr = server_binary.stderr.expect("server `stderr` should exist");
 
     let config = Config::new(token);
     let api = Api::new(config).expect("failed to create API");
@@ -58,7 +53,14 @@ async fn run(opt: Opt) -> Result<(), Error> {
     let server_stdout_reader = tokio::spawn(async move {
         let api = cloned_api;
         let stdout_reader = BufReader::new(server_stdout);
-        read_server_stdout(master_chat_id, api, stdout_reader).await
+        read_server_output(api, master_chat_id, stdout_reader).await
+    });
+
+    let cloned_api = api.clone();
+    let server_stderr_reader = tokio::spawn(async move {
+        let api = cloned_api;
+        let stderr_reader = BufReader::new(server_stderr);
+        read_server_output(api, master_chat_id, stderr_reader).await
     });
 
     let mut dispatcher = Dispatcher::new(context);
@@ -71,29 +73,27 @@ async fn run(opt: Opt) -> Result<(), Error> {
         .await
         .expect("cannot join `server_stdout_reader`")?;
 
+    server_stderr_reader
+        .await
+        .expect("cannot join `server_stderr_reader`")?;
+
     Ok(())
 }
 
-async fn read_server_stdout(
-    master_chat_id: Integer,
+async fn read_server_output<R>(
     api: Api,
-    stdout_reader: BufReader<ChildStdout>,
-) -> Result<(), Error> {
-    for line in stdout_reader.lines() {
-        sleep(Duration::from_millis(500));
-
+    master_chat_id: Integer,
+    reader: BufReader<R>,
+) -> Result<(), Error>
+where
+    R: Read,
+{
+    for line in reader.lines() {
         let line = line.context(IoError)?;
-        let text = format!("```{}```", line);
-        let message = SendMessage::new(master_chat_id, text).parse_mode(ParseMode::Markdown);
+        let text = format!("@: {}", line);
+        let message = SendMessage::new(master_chat_id, text);
 
-        if let Err(e) = api.execute(message).await {
-            if let carapax::ExecuteError::Response(_) = e {
-                let text = format!("{}", line);
-                let message = SendMessage::new(master_chat_id, text);
-
-                api.execute(message).await.context(ExecuteError)?;
-            }
-        }
+        api.execute(message).await.context(ExecuteError)?;
     }
 
     Ok(())
