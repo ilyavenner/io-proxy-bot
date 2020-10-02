@@ -1,12 +1,18 @@
-use std::{io::Write, process::ChildStdin, sync::Arc};
+use std::{fmt::Write as FmtWrite, sync::Arc, time::Duration};
 
 use async_trait::async_trait;
 use carapax::{
+    methods::SendMessage,
     types::{Integer, Message, MessageData, MessageKind, SupergroupChat},
     Api, Handler,
 };
 use snafu::ResultExt;
-use tokio::sync::Mutex;
+use tokio::{
+    io::{AsyncBufReadExt, AsyncRead, AsyncWriteExt, BufReader},
+    process::ChildStdin,
+    sync::Mutex,
+    time,
+};
 
 use crate::error::*;
 
@@ -18,6 +24,7 @@ pub struct Context {
     /// A Minecraft Bedrock server `stdin`.
     pub server_stdin: Arc<Mutex<ChildStdin>>,
 
+    /// A target chat ID.
     pub master_chat_id: Integer,
 }
 
@@ -55,8 +62,53 @@ impl Handler<Context> for MessageHandler {
         let mut server_stdin = context.server_stdin.lock().await;
         server_stdin
             .write_all(format!("{}\n", text).as_bytes())
+            .await
             .context(IoError)?;
 
         Ok(())
+    }
+}
+
+const FILLING_DURATION: Duration = Duration::from_secs(2);
+
+pub async fn stream_server_output<R>(
+    mut reader: BufReader<R>,
+    api: Api,
+    master_chat_id: Integer,
+) -> Result<(), Error>
+where
+    R: AsyncRead + Unpin,
+{
+    loop {
+        let text = collect_server_output(&mut reader).await?;
+
+        match text {
+            None => continue,
+            Some(text) => {
+                let message = SendMessage::new(master_chat_id, text);
+                api.execute(message).await.context(ExecuteError)?;
+            }
+        }
+    }
+}
+
+async fn collect_server_output<R>(reader: &mut BufReader<R>) -> Result<Option<String>, Error>
+where
+    R: AsyncRead + Unpin,
+{
+    let mut text = String::new();
+    let timeout = time::timeout(FILLING_DURATION, async {
+        loop {
+            let mut line = String::new();
+            match reader.read_line(&mut line).await {
+                Ok(_) => write!(text, "{}", line).unwrap(),
+                e @ Err(_) => break e,
+            }
+        }
+    });
+
+    match timeout.await {
+        Ok(result) => result.map(|_| None).context(IoError),
+        Err(_) => Ok(if text.is_empty() { None } else { Some(text) }),
     }
 }
