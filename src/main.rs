@@ -1,11 +1,9 @@
-use std::{
-    io::BufReader,
-    process::{Command, Stdio},
-};
+use std::process::Stdio;
 
 use carapax::{longpoll::LongPoll, Api, Config, Dispatcher};
 use snafu::ResultExt;
 use structopt::StructOpt;
+use tokio::{io::BufReader, process::Command};
 
 use crate::{
     bot::{stream_server_output, Context, MessageHandler},

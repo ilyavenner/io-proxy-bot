@@ -1,10 +1,4 @@
-use std::{
-    fmt::Write as FmtWrite,
-    io::{BufRead, BufReader, Read, Write},
-    process::ChildStdin,
-    sync::Arc,
-    time::{Duration, Instant},
-};
+use std::{fmt::Write as FmtWrite, sync::Arc, time::Duration};
 
 use async_trait::async_trait;
 use carapax::{
@@ -13,7 +7,12 @@ use carapax::{
     Api, Handler,
 };
 use snafu::ResultExt;
-use tokio::sync::Mutex;
+use tokio::{
+    io::{AsyncBufReadExt, AsyncRead, AsyncWriteExt, BufReader},
+    process::ChildStdin,
+    sync::Mutex,
+    time,
+};
 
 use crate::error::*;
 
@@ -63,13 +62,14 @@ impl Handler<Context> for MessageHandler {
         let mut server_stdin = context.server_stdin.lock().await;
         server_stdin
             .write_all(format!("{}\n", text).as_bytes())
-            .context(IoError)?; // BUG: broken pipe
+            .await
+            .context(IoError)?;
 
         Ok(())
     }
 }
 
-const FILLING_DURATION: Duration = Duration::from_secs(1);
+const FILLING_DURATION: Duration = Duration::from_secs(2);
 
 pub async fn stream_server_output<R>(
     mut reader: BufReader<R>,
@@ -77,31 +77,38 @@ pub async fn stream_server_output<R>(
     master_chat_id: Integer,
 ) -> Result<(), Error>
 where
-    R: Read,
+    R: AsyncRead + Unpin,
 {
     loop {
-        let text = collect_server_output(&mut reader)?;
-        let message = SendMessage::new(master_chat_id, text);
+        let text = collect_server_output(&mut reader).await?;
 
-        api.execute(message).await.context(ExecuteError)?;
+        match text {
+            None => continue,
+            Some(text) => {
+                let message = SendMessage::new(master_chat_id, text);
+                api.execute(message).await.context(ExecuteError)?;
+            }
+        }
     }
 }
 
-fn collect_server_output<R>(reader: &mut BufReader<R>) -> Result<String, Error>
+async fn collect_server_output<R>(reader: &mut BufReader<R>) -> Result<Option<String>, Error>
 where
-    R: Read,
+    R: AsyncRead + Unpin,
 {
-    let mut text = String::from("@\n");
-    let beginning_instant = Instant::now();
-
-    for line in reader.lines() {
-        let line = line.context(IoError)?;
-        writeln!(text, "{}", line).unwrap();
-
-        if Instant::now().duration_since(beginning_instant) >= FILLING_DURATION {
-            break;
+    let mut text = String::new();
+    let timeout = time::timeout(FILLING_DURATION, async {
+        loop {
+            let mut line = String::new();
+            match reader.read_line(&mut line).await {
+                Ok(_) => write!(text, "{}", line).unwrap(),
+                e @ Err(_) => break e,
+            }
         }
-    }
+    });
 
-    Ok(text)
+    match timeout.await {
+        Ok(result) => result.map(|_| None).context(IoError),
+        Err(_) => Ok(if text.is_empty() { None } else { Some(text) }),
+    }
 }
