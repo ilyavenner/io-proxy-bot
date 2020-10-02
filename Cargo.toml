@@ -1,6 +1,6 @@
 [package]
 name = "rusty_manager_bot"
-version = "0.2.1"
+version = "0.3.0"
 authors = ["Ilya Venner <ilyavenner@gmail.com>"]
 edition = "2018"
 
@@ -16,7 +16,6 @@ tokio = { version = "0.2.4", features = ["full"] }
 async-trait = "0.1.40"
 snafu = "0.6.9"
 clap = "2.33.3"
-futures-util = "0.3.5"
 
 [[bin]]
 name = "rusty-manager-bot"
