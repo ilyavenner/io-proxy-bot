@@ -69,7 +69,8 @@ impl Handler<Context> for MessageHandler {
     }
 }
 
-const FILLING_DURATION: Duration = Duration::from_secs(2);
+const PAUSE_DURATION: Duration = Duration::from_secs(2);
+const MESSAGE_LENGTH: usize = 4096;
 
 pub async fn stream_server_output<R>(
     mut reader: BufReader<R>,
@@ -85,8 +86,17 @@ where
         match text {
             None => continue,
             Some(text) => {
-                let message = SendMessage::new(master_chat_id, text);
-                api.execute(message).await.context(ExecuteError)?;
+                let text_chars = text.chars().collect::<Vec<char>>();
+                let messages = text_chars
+                    .chunks(MESSAGE_LENGTH)
+                    .map(|chunk| chunk.iter().collect::<String>());
+
+                for message in messages {
+                    let message = SendMessage::new(master_chat_id, message);
+                    api.execute(message).await.context(ExecuteError)?;
+
+                    time::delay_for(PAUSE_DURATION).await;
+                }
             }
         }
     }
@@ -97,7 +107,7 @@ where
     R: AsyncRead + Unpin,
 {
     let mut text = String::new();
-    let timeout = time::timeout(FILLING_DURATION, async {
+    let timeout = time::timeout(PAUSE_DURATION, async {
         loop {
             let mut line = String::new();
             match reader.read_line(&mut line).await {
