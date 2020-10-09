@@ -71,6 +71,7 @@ impl Handler<Context> for MessageHandler {
 
 const PAUSE_DURATION: Duration = Duration::from_secs(2);
 const MESSAGE_LENGTH: usize = 4096;
+const SKIPPING_PATTERN: &str = "Running AutoCompaction...";
 
 pub async fn stream_server_output<R>(
     mut reader: BufReader<R>,
@@ -111,7 +112,14 @@ where
         loop {
             let mut line = String::new();
             match reader.read_line(&mut line).await {
-                Ok(_) => write!(text, "{}", line).unwrap(),
+                Ok(_) => {
+                    if line.contains(SKIPPING_PATTERN) {
+                        continue;
+                    }
+
+                    write!(text, "{}", line).unwrap()
+                }
+
                 e @ Err(_) => break e,
             }
         }
