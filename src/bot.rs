@@ -46,7 +46,7 @@ impl Handler<Context> for MessageHandler {
     type Output = Result<(), Error>;
 
     async fn handle(&mut self, context: &Context, message: Self::Input) -> Self::Output {
-        let text = match message {
+        let message_text = match message {
             Message {
                 kind:
                     MessageKind::Supergroup {
@@ -59,15 +59,18 @@ impl Handler<Context> for MessageHandler {
             _ => return Ok(()),
         };
 
-        if text.starts_with("#") {
-            return Ok(());
-        }
+        let message_lines = message_text
+            .split("\n")
+            .filter(|line| !line.starts_with("#"));
 
         let mut server_stdin = context.server_stdin.lock().await;
-        server_stdin
-            .write_all(format!("{}\n", text).as_bytes())
-            .await
-            .context(IoError)?;
+
+        for line in message_lines {
+            server_stdin
+                .write_all(format!("{}\n", line).as_bytes())
+                .await
+                .context(IoError)?;
+        }
 
         Ok(())
     }
@@ -98,7 +101,7 @@ where
                 let message = SendMessage::new(master_chat_id, message);
                 api.execute(message).await.context(ExecuteError)?;
 
-                time::delay_for(PAUSE_DURATION).await;
+                time::sleep(PAUSE_DURATION).await;
             }
         }
     }
