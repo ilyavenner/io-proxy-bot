@@ -60,7 +60,7 @@ async fn process_message(context: &Context, message: Message) -> Result<(), Erro
 
         for line in text_lines {
             server_stdin
-                .write_all(line.as_bytes())
+                .write_all(format!("{}\n", line).as_bytes())
                 .await
                 .context(IoError)?;
         }
@@ -85,6 +85,8 @@ fn extract_master_chat_message_text(context: &Context, message: Message) -> Opti
 }
 
 pub async fn send_message_to_master_chat(context: &Context, text: &str) -> Result<(), Error> {
+    println!("{}", text);
+
     let message = SendMessage::new(context.master_chat_id, text);
     context
         .api
