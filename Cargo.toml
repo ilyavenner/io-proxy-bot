@@ -1,6 +1,6 @@
 [package]
 name = "rusty_manager_bot"
-version = "0.4.1"
+version = "0.5.0"
 authors = ["Ilya Venner <ilyavenner@gmail.com>"]
 edition = "2018"
 
