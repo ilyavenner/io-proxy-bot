@@ -1,7 +1,7 @@
 use snafu::Snafu;
 
 #[derive(Debug, Snafu)]
-#[snafu(visibility = "pub(crate)")]
+#[snafu(visibility = "pub")]
 pub enum Error {
     #[snafu(display("{}", source))]
     IoError { source: std::io::Error },

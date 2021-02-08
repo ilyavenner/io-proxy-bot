@@ -5,15 +5,18 @@ use snafu::ResultExt;
 use structopt::StructOpt;
 use tokio::{io::BufReader, process::Command};
 
+use crate::init::send_initialization_message;
 use crate::{
-    bot::{stream_server_output, Context, MessageHandler},
+    bot::{Context, SuperGroupMessageHandler},
     error::*,
     init::{setup_logger, Opt},
+    proxy::stream_server_output,
 };
 
-mod bot;
-mod error;
-mod init;
+pub mod bot;
+pub mod error;
+pub mod init;
+pub mod proxy;
 
 #[tokio::main]
 async fn main() {
@@ -47,20 +50,22 @@ async fn run() -> Result<(), Error> {
     let api = Api::new(config).expect("failed to create API");
     let context = Context::new(api.clone(), server_stdin, master_chat_id);
 
-    let cloned_api = api.clone();
+    send_initialization_message(&context).await?;
+
+    let cloned_context = context.clone();
     let server_stdout_reader = tokio::spawn(async move {
         let stdout_reader = BufReader::new(server_stdout);
-        stream_server_output(stdout_reader, cloned_api, master_chat_id).await
+        stream_server_output(cloned_context, stdout_reader).await
     });
 
-    let cloned_api = api.clone();
+    let cloned_context = context.clone();
     let server_stderr_reader = tokio::spawn(async move {
         let stderr_reader = BufReader::new(server_stderr);
-        stream_server_output(stderr_reader, cloned_api, master_chat_id).await
+        stream_server_output(cloned_context, stderr_reader).await
     });
 
     let mut dispatcher = Dispatcher::new(context);
-    dispatcher.add_handler(MessageHandler);
+    dispatcher.add_handler(SuperGroupMessageHandler);
 
     log::info!("Running the bot...");
     LongPoll::new(api, dispatcher).run().await;

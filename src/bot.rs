@@ -1,22 +1,18 @@
-use std::{fmt::Write as FmtWrite, sync::Arc, time::Duration};
+use std::sync::Arc;
 
 use async_trait::async_trait;
 use carapax::{
-    methods::SendMessage,
     types::{Integer, Message, MessageData, MessageKind, SupergroupChat},
     Api, Handler,
 };
 use snafu::ResultExt;
-use tokio::{
-    io::{AsyncBufReadExt, AsyncRead, AsyncWriteExt, BufReader},
-    process::ChildStdin,
-    sync::Mutex,
-    time,
-};
+use tokio::{io::AsyncWriteExt, process::ChildStdin, sync::Mutex};
 
 use crate::error::*;
+use carapax::methods::SendMessage;
 
 /// A bot context.
+#[derive(Clone)]
 pub struct Context {
     /// A [carapax::Api].
     pub api: Api,
@@ -38,99 +34,62 @@ impl Context {
     }
 }
 
-pub struct MessageHandler;
+pub struct SuperGroupMessageHandler;
 
 #[async_trait]
-impl Handler<Context> for MessageHandler {
+impl Handler<Context> for SuperGroupMessageHandler {
     type Input = Message;
     type Output = Result<(), Error>;
 
     async fn handle(&mut self, context: &Context, message: Self::Input) -> Self::Output {
-        let message_text = match message {
-            Message {
-                kind:
-                    MessageKind::Supergroup {
-                        chat: SupergroupChat { id, .. },
-                        ..
-                    },
-                data: MessageData::Text(text),
-                ..
-            } if id == context.master_chat_id => text.data,
-            _ => return Ok(()),
-        };
+        process_message(context, message).await
+    }
+}
 
-        let message_lines = message_text
+const COMMENT_PATTERN: &str = "#";
+
+async fn process_message(context: &Context, message: Message) -> Result<(), Error> {
+    let message_text = extract_master_chat_message_text(context, message);
+
+    if let Some(text) = message_text {
+        let text_lines = text
             .split("\n")
-            .filter(|line| !line.starts_with("#"));
+            .filter(|line| !line.starts_with(COMMENT_PATTERN));
 
         let mut server_stdin = context.server_stdin.lock().await;
 
-        for line in message_lines {
+        for line in text_lines {
             server_stdin
-                .write_all(format!("{}\n", line).as_bytes())
+                .write_all(line.as_bytes())
                 .await
                 .context(IoError)?;
         }
+    }
 
-        Ok(())
+    Ok(())
+}
+
+fn extract_master_chat_message_text(context: &Context, message: Message) -> Option<String> {
+    match message {
+        Message {
+            kind:
+                MessageKind::Supergroup {
+                    chat: SupergroupChat { id, .. },
+                    ..
+                },
+            data: MessageData::Text(text),
+            ..
+        } if id == context.master_chat_id => Some(text.data),
+        _ => None,
     }
 }
 
-const PAUSE_DURATION: Duration = Duration::from_secs(2);
-const MESSAGE_LENGTH: usize = 4096;
-const SKIPPING_PATTERN: &str = "Running AutoCompaction...";
-
-pub async fn stream_server_output<R>(
-    mut reader: BufReader<R>,
-    api: Api,
-    master_chat_id: Integer,
-) -> Result<(), Error>
-where
-    R: AsyncRead + Unpin,
-{
-    loop {
-        let server_output = collect_server_output(&mut reader).await?;
-
-        if let Some(text) = server_output {
-            let text_chars = text.chars().collect::<Vec<char>>();
-            let messages = text_chars
-                .chunks(MESSAGE_LENGTH)
-                .map(|chunk| chunk.iter().collect::<String>());
-
-            for message in messages {
-                let message = SendMessage::new(master_chat_id, message);
-                api.execute(message).await.context(ExecuteError)?;
-
-                time::sleep(PAUSE_DURATION).await;
-            }
-        }
-    }
-}
-
-async fn collect_server_output<R>(reader: &mut BufReader<R>) -> Result<Option<String>, Error>
-where
-    R: AsyncRead + Unpin,
-{
-    let mut text = String::new();
-    let timeout = time::timeout(PAUSE_DURATION, async {
-        loop {
-            let mut line = String::new();
-            match reader.read_line(&mut line).await {
-                Ok(_) => {
-                    if line.contains(SKIPPING_PATTERN) {
-                        continue;
-                    }
-
-                    write!(text, "{}", line).unwrap()
-                }
-
-                e @ Err(_) => break e,
-            }
-        }
-    });
-
-    match timeout.await {
-        Ok(result) => result.map(|_| None).context(IoError),
-        Err(_) => Ok(if text.is_empty() { None } else { Some(text) }),
-    }
+pub async fn send_message_to_master_chat(context: &Context, text: &str) -> Result<(), Error> {
+    let message = SendMessage::new(context.master_chat_id, text);
+    context
+        .api
+        .execute(message)
+        .await
+        .map(|_| ())
+        .context(ExecuteError)
 }
