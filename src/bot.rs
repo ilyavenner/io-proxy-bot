@@ -46,7 +46,7 @@ impl Handler<Context> for MessageHandler {
     type Output = Result<(), Error>;
 
     async fn handle(&mut self, context: &Context, message: Self::Input) -> Self::Output {
-        let text: String = match message {
+        let text = match message {
             Message {
                 kind:
                     MessageKind::Supergroup {
@@ -58,6 +58,10 @@ impl Handler<Context> for MessageHandler {
             } if id == context.master_chat_id => text.data,
             _ => return Ok(()),
         };
+
+        if text.starts_with("#") {
+            return Ok(());
+        }
 
         let mut server_stdin = context.server_stdin.lock().await;
         server_stdin
@@ -82,22 +86,19 @@ where
     R: AsyncRead + Unpin,
 {
     loop {
-        let text = collect_server_output(&mut reader).await?;
+        let server_output = collect_server_output(&mut reader).await?;
 
-        match text {
-            None => continue,
-            Some(text) => {
-                let text_chars = text.chars().collect::<Vec<char>>();
-                let messages = text_chars
-                    .chunks(MESSAGE_LENGTH)
-                    .map(|chunk| chunk.iter().collect::<String>());
+        if let Some(text) = server_output {
+            let text_chars = text.chars().collect::<Vec<char>>();
+            let messages = text_chars
+                .chunks(MESSAGE_LENGTH)
+                .map(|chunk| chunk.iter().collect::<String>());
 
-                for message in messages {
-                    let message = SendMessage::new(master_chat_id, message);
-                    api.execute(message).await.context(ExecuteError)?;
+            for message in messages {
+                let message = SendMessage::new(master_chat_id, message);
+                api.execute(message).await.context(ExecuteError)?;
 
-                    time::delay_for(PAUSE_DURATION).await;
-                }
+                time::delay_for(PAUSE_DURATION).await;
             }
         }
     }
