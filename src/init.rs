@@ -4,6 +4,19 @@ use carapax::types::Integer;
 use clap::AppSettings;
 use structopt::StructOpt;
 
+use crate::{
+    bot::{send_message_to_master_chat, Context},
+    error::*,
+};
+
+const INITIALIZATION_MESSAGE: &str = concat!(
+    "Используется `",
+    env!("CARGO_PKG_NAME"),
+    "` версии `",
+    env!("CARGO_PKG_VERSION"),
+    "`... Сделано с ❤️ Ильёй Веннером.",
+);
+
 /// An util which provides managing of the Minecraft Bedrock Server.
 #[derive(Debug, StructOpt)]
 #[structopt(global_settings = &[AppSettings::AllowNegativeNumbers])]
@@ -53,4 +66,8 @@ pub fn setup_logger() {
         .chain(std::io::stdout())
         .apply()
         .expect("cannot setup logger");
+}
+
+pub async fn send_initialization_message(context: &Context) -> Result<(), Error> {
+    send_message_to_master_chat(context, INITIALIZATION_MESSAGE).await
 }
