@@ -60,7 +60,7 @@ async fn process_message(context: &Context, message: Message) -> Result<(), Erro
 
         for line in text_lines {
             server_stdin
-                .write_all(line.as_bytes())
+                .write_all(format!("{}\n", line).as_bytes())
                 .await
                 .context(IoError)?;
         }
