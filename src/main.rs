@@ -5,11 +5,10 @@ use snafu::ResultExt;
 use structopt::StructOpt;
 use tokio::{io::BufReader, process::Command};
 
-use crate::init::send_initialization_message;
 use crate::{
     bot::{Context, SuperGroupMessageHandler},
     error::*,
-    init::{setup_logger, Opt},
+    init::{send_initialization_message, setup_logger, Opt},
     proxy::stream_server_output,
 };
 
