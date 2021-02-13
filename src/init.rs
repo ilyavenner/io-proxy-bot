@@ -14,7 +14,7 @@ const INITIALIZATION_MESSAGE: &str = concat!(
     env!("CARGO_PKG_NAME"),
     "` версии `",
     env!("CARGO_PKG_VERSION"),
-    "`... Сделано с ❤️ Ильёй Веннером.",
+    "`...",
 );
 
 /// An util which provides managing of the Minecraft Bedrock Server.
