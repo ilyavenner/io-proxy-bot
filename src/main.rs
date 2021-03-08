@@ -1,81 +1,142 @@
-use std::process::Stdio;
+/*
+ * Copyright (c) 2021 Ilya Venner
+ *
+ * This program is free software: you can redistribute it and/or modify
+ * it under the terms of the GNU Affero General Public License as published by
+ * the Free Software Foundation, either version 3 of the License, or
+ * (at your option) any later version.
+ *
+ * This program is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the
+ * GNU Affero General Public License for more details.
+ *
+ * You should have received a copy of the GNU Affero General Public License
+ * along with this program. If not, see <https://www.gnu.org/licenses/>.
+ */
+
+//! An util which can proxy of the given executable.
+
+#![deny(missing_docs)]
+
+use std::{process::Stdio, sync::Arc};
 
 use carapax::{longpoll::LongPoll, Api, Config, Dispatcher};
-use snafu::ResultExt;
+use snafu::{OptionExt, ResultExt};
 use structopt::StructOpt;
-use tokio::{io::BufReader, process::Command};
+use tokio::{io::BufReader, process::Command, sync::Mutex};
 
 use crate::{
-    bot::{Context, SuperGroupMessageHandler},
+    bot::{Context, MessageHandler},
     error::*,
-    init::{send_initialization_message, setup_logger, Opt},
-    proxy::stream_server_output,
+    init::Opt,
 };
 
-pub mod bot;
-pub mod error;
-pub mod init;
-pub mod proxy;
+/// Bot items like [context](Context) and [message handler](MessageHandler).
+mod bot;
+
+/// Contains an application error.
+mod error;
+
+/// Initialization items like argument parser description and logger.
+mod init;
+
+/// Executable proxying.
+mod proxy;
 
 #[tokio::main]
 async fn main() {
-    setup_logger();
-    let result = run().await;
-
-    if let Err(e) = result {
+    if let Err(e) = run().await {
         log::error!("{}", e);
     }
 }
 
+/// The application runner.
 async fn run() -> Result<(), Error> {
     let Opt {
         token,
         master_chat_id,
-        path_to_binary,
+        path_to_executable,
+        pause_duration,
+        filter_dictionary,
+        is_verbose,
     } = StructOpt::from_args();
 
-    let server_binary = Command::new(path_to_binary)
+    init::setup_logger(is_verbose);
+    log::trace!("logger initialized");
+
+    let executable = Command::new(&path_to_executable)
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
         .spawn()
-        .context(IoError)?;
+        .context(CannotSpawnProcess {
+            path_to_executable: &path_to_executable,
+        })?;
 
-    let server_stdin = server_binary.stdin.expect("server `stdin` should exist");
-    let server_stdout = server_binary.stdout.expect("server `stdout` should exist");
-    let server_stderr = server_binary.stderr.expect("server `stderr` should exist");
+    log::info!("instance of `{}` spawned", path_to_executable.display());
+
+    let executable_stdin = executable.stdin.context(NoStdIn {
+        path_to_executable: &path_to_executable,
+    })?;
+    log::trace!("`stdin` of instance captured");
+
+    let executable_stdout = executable.stdout.context(NoStdOut {
+        path_to_executable: &path_to_executable,
+    })?;
+    log::trace!("`stdout` of instance captured");
+
+    let executable_stderr = executable.stderr.context(NoStdErr {
+        path_to_executable: &path_to_executable,
+    })?;
+    log::trace!("`stderr` of instance captured");
 
     let config = Config::new(token);
-    let api = Api::new(config).expect("failed to create API");
-    let context = Context::new(api.clone(), server_stdin, master_chat_id);
+    let api = Api::new(config).context(TelegramApi)?;
+    let filter_dictionary = filter_dictionary
+        .map(|strings| strings.into_iter().collect())
+        .unwrap_or_default();
 
-    send_initialization_message(&context).await?;
-
-    let cloned_context = context.clone();
-    let server_stdout_reader = tokio::spawn(async move {
-        let stdout_reader = BufReader::new(server_stdout);
-        stream_server_output(cloned_context, stdout_reader).await
+    let context = Arc::new(Context {
+        api: api.clone(),
+        executable_stdin: Mutex::new(executable_stdin),
+        master_chat_id,
+        pause_duration: *pause_duration,
+        filter_dictionary,
     });
 
-    let cloned_context = context.clone();
-    let server_stderr_reader = tokio::spawn(async move {
-        let stderr_reader = BufReader::new(server_stderr);
-        stream_server_output(cloned_context, stderr_reader).await
+    init::send_initialization_message(&context).await?;
+    log::trace!("telegram bot API initialized");
+
+    let copy_of_context = Arc::clone(&context);
+    let reader_of_executable_stdout = tokio::spawn(async move {
+        let stdout_reader = BufReader::new(executable_stdout);
+        proxy::stream_executable_output(&copy_of_context, stdout_reader).await
     });
+    log::trace!("`stdout` reader was ran");
+
+    let copy_of_context = Arc::clone(&context);
+    let reader_of_executable_stderr = tokio::spawn(async move {
+        let stderr_reader = BufReader::new(executable_stderr);
+        proxy::stream_executable_output(&copy_of_context, stderr_reader).await
+    });
+    log::trace!("`stderr` reader was ran");
 
     let mut dispatcher = Dispatcher::new(context);
-    dispatcher.add_handler(SuperGroupMessageHandler);
+    dispatcher.add_handler(MessageHandler);
 
-    log::info!("Running the bot...");
+    log::info!("running the bot...");
     LongPoll::new(api, dispatcher).run().await;
 
-    server_stdout_reader
-        .await
-        .expect("cannot join `server_stdout_reader`")?;
+    reader_of_executable_stdout.await.unwrap_or_else(|e| {
+        log::error!("cannot join `executable_stdout_reader`: {}", e);
+        Ok(())
+    })?;
 
-    server_stderr_reader
-        .await
-        .expect("cannot join `server_stderr_reader`")?;
+    reader_of_executable_stderr.await.unwrap_or_else(|e| {
+        log::error!("cannot join `executable_stdout_reader`: {}", e);
+        Ok(())
+    })?;
 
     Ok(())
 }

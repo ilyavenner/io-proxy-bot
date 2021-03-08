@@ -1,95 +1,101 @@
-use std::sync::Arc;
+/*
+ * Copyright (c) 2021 Ilya Venner
+ *
+ * This program is free software: you can redistribute it and/or modify
+ * it under the terms of the GNU Affero General Public License as published by
+ * the Free Software Foundation, either version 3 of the License, or
+ * (at your option) any later version.
+ *
+ * This program is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the
+ * GNU Affero General Public License for more details.
+ *
+ * You should have received a copy of the GNU Affero General Public License
+ * along with this program. If not, see <https://www.gnu.org/licenses/>.
+ */
+
+use std::{collections::HashSet, sync::Arc, time::Duration};
 
 use async_trait::async_trait;
 use carapax::{
-    types::{Integer, Message, MessageData, MessageKind, SupergroupChat},
+    methods::SendMessage,
+    types::{Integer, Message, MessageData},
     Api, Handler,
 };
 use snafu::ResultExt;
 use tokio::{io::AsyncWriteExt, process::ChildStdin, sync::Mutex};
 
 use crate::error::*;
-use carapax::methods::SendMessage;
 
 /// A bot context.
-#[derive(Clone)]
 pub struct Context {
-    /// A [carapax::Api].
+    /// A telegram bot [API](carapax::Api).
     pub api: Api,
 
-    /// A Minecraft Bedrock server `stdin`.
-    pub server_stdin: Arc<Mutex<ChildStdin>>,
-
-    /// A target chat ID.
+    /// A master chat ID from which the bot will process messages.
     pub master_chat_id: Integer,
+
+    /// A `stdin` of the given executable.
+    pub executable_stdin: Mutex<ChildStdin>,
+
+    /// A pause duration between two sending messages.
+    pub pause_duration: Duration,
+
+    /// A strings which will ignored from proxying `stdout`.
+    pub filter_dictionary: HashSet<String>,
 }
 
-impl Context {
-    pub fn new(api: Api, server_stdin: ChildStdin, master_chat_id: Integer) -> Self {
-        Self {
-            api,
-            server_stdin: Arc::new(Mutex::new(server_stdin)),
-            master_chat_id,
-        }
-    }
-}
+/// A special symbol which from comments start (such strings will be ignored).
+const COMMENT_PATTERN: char = '#';
 
-pub struct SuperGroupMessageHandler;
+/// A handler which proxy [executable stdin](Context::executable_stdin) only from messages in the
+/// [master chat](Context::master_chat_id).
+pub struct MessageHandler;
 
 #[async_trait]
-impl Handler<Context> for SuperGroupMessageHandler {
+impl Handler<Arc<Context>> for MessageHandler {
     type Input = Message;
     type Output = Result<(), Error>;
 
-    async fn handle(&mut self, context: &Context, message: Self::Input) -> Self::Output {
-        process_message(context, message).await
-    }
-}
+    async fn handle(&mut self, context: &Arc<Context>, message: Self::Input) -> Self::Output {
+        let message_text = extract_master_chat_message_text(context, message);
 
-const COMMENT_PATTERN: &str = "#";
+        if let Some(text) = message_text {
+            let text_lines = text
+                .lines()
+                .filter(|line| !line.starts_with(COMMENT_PATTERN));
 
-async fn process_message(context: &Context, message: Message) -> Result<(), Error> {
-    let message_text = extract_master_chat_message_text(context, message);
+            let mut executable_stdin = context.executable_stdin.lock().await;
 
-    if let Some(text) = message_text {
-        let text_lines = text
-            .split("\n")
-            .filter(|line| !line.starts_with(COMMENT_PATTERN));
-
-        let mut server_stdin = context.server_stdin.lock().await;
-
-        for line in text_lines {
-            server_stdin
-                .write_all(format!("{}\n", line).as_bytes())
-                .await
-                .context(IoError)?;
+            for line in text_lines {
+                executable_stdin
+                    .write_all(format!("{}\n", line).as_bytes())
+                    .await
+                    .context(WriteExecutableStdIn)?;
+            }
         }
-    }
 
-    Ok(())
+        Ok(())
+    }
 }
 
+/// Extracts text of the incoming message from the [master chat](Context::master_chat_id).
+///
+/// Returns non-empty string.
 fn extract_master_chat_message_text(context: &Context, message: Message) -> Option<String> {
-    match message {
-        Message {
-            kind:
-                MessageKind::Supergroup {
-                    chat: SupergroupChat { id, .. },
-                    ..
-                },
-            data: MessageData::Text(text),
-            ..
-        } if id == context.master_chat_id => Some(text.data),
-        _ => None,
+    if message.get_chat_id() == context.master_chat_id {
+        match message.data {
+            MessageData::Text(text) => Some(text.data),
+            _ => None,
+        }
+    } else {
+        None
     }
 }
 
-pub async fn send_message_to_master_chat(context: &Context, text: &str) -> Result<(), Error> {
+/// Sends the message to the [master chat](Context::master_chat_id).
+pub async fn send_message_to_master_chat(context: &Context, text: &str) -> Result<Message, Error> {
     let message = SendMessage::new(context.master_chat_id, text);
-    context
-        .api
-        .execute(message)
-        .await
-        .map(|_| ())
-        .context(ExecuteError)
+    context.api.execute(message).await.context(SendMessage)
 }
