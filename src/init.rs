@@ -15,18 +15,11 @@
  * along with this program. If not, see <https://www.gnu.org/licenses/>.
  */
 
-use std::path::PathBuf;
+use std::{io, path::PathBuf};
 
-use carapax::{
-    methods::SendMessage,
-    types::{Integer, Message, ParseMode},
-};
 use clap::AppSettings;
 use fern::colors::{Color, ColoredLevelConfig};
-use snafu::ResultExt;
 use structopt::StructOpt;
-
-use crate::{bot::Context, error::*};
 
 /// An util which can proxy of the given executable.
 #[derive(Debug, StructOpt)]
@@ -38,7 +31,7 @@ pub struct Opt {
 
     /// A master chat ID from which the bot will process messages.
     #[structopt(short = "c", long = "chat")]
-    pub master_chat_id: Integer,
+    pub master_chat_id: i64,
 
     /// A path to the executable.
     #[structopt(short = "e", long = "executable")]
@@ -83,32 +76,7 @@ pub fn setup_logger(is_verbose: bool) {
         })
         .level(log::LevelFilter::Warn)
         .level_for(std::env!("CARGO_PKG_NAME"), application_log_level)
-        .chain(std::io::stdout())
+        .chain(io::stdout())
         .apply()
         .expect("cannot set up the logger");
-}
-
-/// Sends the initialization message to the [master chat](Context::master_chat_id).
-pub async fn send_initialization_message(context: &Context) -> Result<Message, Error> {
-    const INITIALIZATION_MESSAGE: &str = concat!(
-        "You are using `",
-        std::env!("CARGO_PKG_NAME"),
-        "`, version `",
-        std::env!("CARGO_PKG_VERSION"),
-        "`.\n\nThis program is free software: you can redistribute it and/or modify it under the \
-        terms of the \
-        [GNU Affero General Public License](https://www.gnu.org/licenses/agpl-3.0.html) \
-        as published by the Free Software Foundation, either version 3 of the License, or (at your \
-        option) any later version.\n\nThe original source \
-        code is available in [this repository](https://github.com/ilyavenner/io-proxy-bot/)."
-    );
-
-    let initialization_message = SendMessage::new(context.master_chat_id, INITIALIZATION_MESSAGE)
-        .parse_mode(ParseMode::Markdown);
-
-    context
-        .api
-        .execute(initialization_message)
-        .await
-        .context(SendMessage)
 }

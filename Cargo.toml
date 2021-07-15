@@ -8,13 +8,13 @@ edition = "2018"
 
 [dependencies]
 structopt = "0.3"
-carapax = "0.10"
 log = "0.4"
 chrono = "0.4"
 async-trait = "0.1"
 snafu = "0.6"
 clap = "2.33"
 humantime = "2.1"
+display-error-chain = "0.1"
 
 [dependencies.tokio]
 version = "1"
@@ -23,6 +23,10 @@ features = ["full"]
 [dependencies.fern]
 version = "0.6"
 features = ["colored"]
+
+[dependencies.teloxide]
+version = "0.5"
+features = ["auto-send"]
 
 [[bin]]
 name = "io-proxy-bot"
